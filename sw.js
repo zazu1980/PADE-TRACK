@@ -1,4 +1,4 @@
-const CACHE_NAME = 'padel-track-v7';
+const CACHE_NAME = 'padel-track-v8';
 const ASSETS = ['./index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (event) => {
@@ -21,7 +21,7 @@ self.addEventListener('fetch', (event) => {
   // Só intercepta GET. Os envios para a Google Sheet (POST) vão direto à rede.
   if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
-  if (url.hostname.endsWith('google.com') || url.hostname.endsWith('googleusercontent.com')) return;
+  if (url.hostname.endsWith('google.com') || url.hostname.endsWith('googleusercontent.com') || url.hostname.endsWith('github.com')) return;
 
   event.respondWith(
     caches.match(event.request).then((cached) => {

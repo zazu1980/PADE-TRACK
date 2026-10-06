@@ -400,6 +400,20 @@
       </select>
       <button class="btn block" id="btnAddActionType" style="margin-top:10px;">Adicionar tipo de ação</button>
     </div>
+    <div class="section-label">Backup</div>
+    <div class="card">
+      <div style="font-size:12.5px; color:var(--line-dim); line-height:1.45; margin-bottom:8px;">Guarda uma cópia automática (JSON + CSV) num repositório <b>privado</b> do GitHub no fim de cada jogo.</div>
+      <label class="field-label">Repositório de dados (utilizador/nome)</label>
+      <input type="text" id="ghRepoInput" placeholder="o-teu-utilizador/padel-dados" autocapitalize="off" autocorrect="off" spellcheck="false">
+      <label class="field-label">Chave de acesso (token)</label>
+      <input type="password" id="ghTokenInput" placeholder="github_pat_..." autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+      <div style="display:flex; gap:8px; margin-top:10px;">
+        <button class="btn secondary" id="btnSaveGh" style="flex:1;">Guardar</button>
+        <button class="btn" id="btnGhNow" style="flex:1;">Fazer backup agora</button>
+      </div>
+      <button class="btn secondary block" id="btnGhRestore" style="margin-top:8px;">Repor do GitHub</button>
+      <div id="ghStatus" style="margin-top:10px; font-size:12.5px; color:var(--line-dim); line-height:1.45;"></div>
+    </div>
     <div class="section-label hidden">Google Sheet</div>
     <div class="card hidden">
       <label class="field-label">Link do Apps Script (termina em /exec)</label>
@@ -414,7 +428,7 @@
     </div>
     <div class="section-label">Dados</div>
     <div class="card" style="display:flex; flex-direction:column; gap:8px;">
-      <button class="btn block" id="btnBackupSettings">💾 Guardar backup (partilhar)</button>
+      <button class="btn block" id="btnBackupSettings">💾 Partilhar ficheiro de backup</button>
       <button class="btn secondary block" id="btnImportBackup">Importar backup</button>
       <input type="file" id="importFileInput" accept=".json,application/json" class="hidden">
       <button class="btn secondary block" id="btnExportAll">Exportar tudo (JSON)</button>
@@ -512,6 +526,8 @@ let state = {
   sheetSecret: '',
   lastSync: 0,
   lastBackup: 0,
+  ghRepo: '',
+  ghToken: '',
   currentSessionActions: [],
   currentSession: null,
   newGameSlots: {A1:null, A2:null, B1:null, B2:null},
@@ -540,6 +556,8 @@ async function loadAll(){
   const m2 = await idbGet('meta','sheetSecret'); state.sheetSecret = m2 ? m2.value : '';
   const m3 = await idbGet('meta','lastSync'); state.lastSync = m3 ? Number(m3.value) : 0;
   const m4 = await idbGet('meta','lastBackup'); state.lastBackup = m4 ? Number(m4.value) : 0;
+  const m5 = await idbGet('meta','ghRepo'); state.ghRepo = m5 ? m5.value : '';
+  const m6 = await idbGet('meta','ghToken'); state.ghToken = m6 ? m6.value : '';
 }
 
 function renderCoachName(){
@@ -880,7 +898,7 @@ document.getElementById('btnEndGame').onclick = ()=>{
     renderSummary();
     showView('Summary');
     syncSheet(false);
-    toast('Jogo guardado — não te esqueças do backup');
+    if(ghConfigured()) githubBackup(false); else toast('Jogo guardado — não te esqueças do backup');
   });
 };
 
@@ -1558,7 +1576,7 @@ document.getElementById('btnShareProfile').onclick = ()=>{
   const fname = `padel-perfil-${playerName(playerId).replace(/\s+/g,'-').toLowerCase()}.png`;
   shareCanvasBlob(canvas, fname);
 };
-document.getElementById('btnSettings').onclick = ()=>{ document.getElementById('coachNameInput').value = state.coachName; document.getElementById('errorThresholdInput').value = state.errorThreshold; document.getElementById('sheetUrlInput').value = state.sheetUrl; document.getElementById('sheetSecretInput').value = state.sheetSecret; renderSyncStatus(); renderActionTypesList(); showView('Settings'); };
+document.getElementById('btnSettings').onclick = ()=>{ document.getElementById('coachNameInput').value = state.coachName; document.getElementById('errorThresholdInput').value = state.errorThreshold; document.getElementById('sheetUrlInput').value = state.sheetUrl; document.getElementById('sheetSecretInput').value = state.sheetSecret; renderSyncStatus(); document.getElementById('ghRepoInput').value = state.ghRepo; document.getElementById('ghTokenInput').value = state.ghToken; renderBackupStatus(); renderActionTypesList(); showView('Settings'); };
 
 // simple back handling: tapping brand goes home
 document.querySelector('.brand').onclick = ()=>{ renderHome(); showView('Home'); };
@@ -1686,6 +1704,7 @@ function renderBackupBanner(){
   if(!el) return;
   const n = pendingBackupCount();
   el.classList.toggle('hidden', n === 0);
+  const hb = document.getElementById('btnBackupHome'); if(hb) hb.textContent = ghConfigured() ? 'Fazer backup' : 'Guardar backup';
   if(n > 0){
     document.getElementById('backupBannerText').textContent =
       n + (n===1 ? ' jogo ainda sem backup.' : ' jogos ainda sem backup.');
@@ -1722,15 +1741,19 @@ async function shareBackup(){
   }
 }
 
+function confirmImport(data){
+  if(!data || !Array.isArray(data.players) || !Array.isArray(data.sessions) || !Array.isArray(data.actions)){
+    toast('Este ficheiro não parece um backup do Padel Track'); return;
+  }
+  showConfirm('Importar '+data.players.length+' jogadores, '+data.sessions.length+' jogos e '+data.actions.length+' ações? Junta aos dados atuais e não apaga nada.', ()=> doImport(data));
+}
+
 function importBackupFile(file){
   const reader = new FileReader();
   reader.onload = ()=>{
     let data;
     try{ data = JSON.parse(reader.result); }catch(e){ toast('Ficheiro inválido'); return; }
-    if(!data || !Array.isArray(data.players) || !Array.isArray(data.sessions) || !Array.isArray(data.actions)){
-      toast('Este ficheiro não parece um backup do Padel Track'); return;
-    }
-    showConfirm('Importar '+data.players.length+' jogadores, '+data.sessions.length+' jogos e '+data.actions.length+' ações? Junta aos dados atuais e não apaga nada.', ()=> doImport(data));
+    confirmImport(data);
   };
   reader.onerror = ()=> toast('Não foi possível ler o ficheiro');
   reader.readAsText(file);
@@ -1764,8 +1787,8 @@ async function doImport(data){
   }
 }
 
-document.getElementById('btnBackupHome').onclick = shareBackup;
-document.getElementById('btnBackupSummary').onclick = shareBackup;
+document.getElementById('btnBackupHome').onclick = ()=> backupNow();
+document.getElementById('btnBackupSummary').onclick = ()=> backupNow();
 document.getElementById('btnBackupSettings').onclick = shareBackup;
 document.getElementById('btnImportBackup').onclick = ()=> document.getElementById('importFileInput').click();
 document.getElementById('importFileInput').onchange = (e)=>{
@@ -1773,6 +1796,156 @@ document.getElementById('importFileInput').onchange = (e)=>{
   if(f) importBackupFile(f);
   e.target.value = '';
 };
+
+// ---------- BACKUP AUTOMÁTICO NO GITHUB ----------
+let ghBusy = false;
+const GH_JSON = 'padel-track-backup.json';
+const GH_CSV = 'acoes.csv';
+const GH_API = 'https://api.github.com/repos/';
+
+function ghConfigured(){ return !!(state.ghRepo && state.ghToken); }
+
+function ghHeaders(accept){
+  return {'Authorization':'Bearer '+state.ghToken, 'Accept': accept||'application/vnd.github+json', 'X-GitHub-Api-Version':'2022-11-28'};
+}
+
+function b64utf8(str){
+  const bytes = new TextEncoder().encode(str);
+  let bin = ''; const CH = 0x8000;
+  for(let i=0;i<bytes.length;i+=CH) bin += String.fromCharCode.apply(null, bytes.subarray(i,i+CH));
+  return btoa(bin);
+}
+
+async function ghError(r){
+  let msg = ''; try{ msg = (await r.json()).message || ''; }catch(e){}
+  if(r.status===401) return new Error('chave inválida ou expirada');
+  if(r.status===403 || r.status===404) return new Error('sem acesso ao repositório (confirma o nome e as permissões da chave)');
+  return new Error(msg || ('erro '+r.status));
+}
+
+async function ghFileSha(path){
+  const r = await fetch(GH_API+state.ghRepo+'/contents/'+path, {headers: ghHeaders('application/vnd.github.object+json'), cache:'no-store'});
+  if(r.status===404) return null;
+  if(!r.ok) throw await ghError(r);
+  return (await r.json()).sha;
+}
+
+async function ghPut(path, text, message){
+  for(let attempt=0; attempt<2; attempt++){
+    const sha = await ghFileSha(path);
+    const body = {message: message, content: b64utf8(text)};
+    if(sha) body.sha = sha;
+    const r = await fetch(GH_API+state.ghRepo+'/contents/'+path, {
+      method:'PUT',
+      headers: Object.assign({'Content-Type':'application/json'}, ghHeaders()),
+      body: JSON.stringify(body)
+    });
+    if(r.ok) return;
+    if((r.status===409 || r.status===422) && attempt===0) continue;   // ficheiro mudou entretanto: tenta de novo
+    throw await ghError(r);
+  }
+}
+
+function csvCell(v){
+  const s = String(v==null ? '' : v);
+  return /[";,\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
+}
+
+async function buildActionsCsv(){
+  const sessions = await idbGetAll('sessions');
+  const actions = await idbGetAll('actions');
+  const bySession = {};
+  actions.forEach(a=>{ (bySession[a.sessionId] = bySession[a.sessionId] || []).push(a); });
+  const rows = [['ID ação','ID jogo','Data','Hora','Jogo','Treinador','Equipa','Jogador','Ação','Polaridade','Tempo (s)','Tempo (mm:ss)']];
+  sessions.filter(s=>s.status==='finished').sort((a,b)=>(a.createdAt||0)-(b.createdAt||0)).forEach(s=>{
+    (bySession[s.id]||[]).sort((x,y)=>x.ts-y.ts).forEach(a=> rows.push(actionRow(s,a)));
+  });
+  return '\ufeff' + rows.map(r=>r.map(csvCell).join(';')).join('\n');
+}
+
+function renderBackupStatus(){
+  const el = document.getElementById('ghStatus');
+  if(!el) return;
+  if(!ghConfigured()){ el.textContent = 'Backup automático não configurado. Podes usar "Partilhar ficheiro de backup".'; return; }
+  const n = pendingBackupCount();
+  let txt = n>0 ? (n+(n===1?' jogo sem backup.':' jogos sem backup.')) : 'Tudo guardado.';
+  if(state.lastBackup) txt += ' Último backup: '+new Date(state.lastBackup).toLocaleString('pt-PT',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})+'.';
+  el.textContent = txt;
+}
+
+function ghErrText(err){
+  return (err instanceof TypeError) ? 'sem ligação à internet' : (err.message || String(err));
+}
+
+async function githubBackup(manual){
+  if(!ghConfigured()){ if(manual) toast('Configura primeiro o repositório e a chave'); return false; }
+  if(ghBusy) return false;
+  if(!navigator.onLine){ if(manual) toast('Sem internet — fica pendente'); return false; }
+  ghBusy = true;
+  const btn = document.getElementById('btnGhNow');
+  if(btn){ btn.disabled = true; btn.textContent = 'A guardar…'; }
+  try{
+    const stamp = new Date().toLocaleString('pt-PT');
+    await ghPut(GH_JSON, JSON.stringify(await buildBackup()), 'Backup '+stamp);
+    await ghPut(GH_CSV, await buildActionsCsv(), 'Ações '+stamp);
+    await markBackedUp();
+    toast('Backup guardado no GitHub ✓');
+    return true;
+  }catch(err){
+    toast('Backup falhou: '+ghErrText(err));
+    return false;
+  }finally{
+    ghBusy = false;
+    if(btn){ btn.disabled = false; btn.textContent = 'Fazer backup agora'; }
+    renderBackupStatus();
+  }
+}
+
+async function githubRestore(){
+  if(!ghConfigured()){ toast('Configura primeiro o repositório e a chave'); return; }
+  try{
+    const r = await fetch(GH_API+state.ghRepo+'/contents/'+GH_JSON, {headers: ghHeaders('application/vnd.github.raw+json'), cache:'no-store'});
+    if(r.status===404){ toast('Ainda não há backup neste repositório'); return; }
+    if(!r.ok) throw await ghError(r);
+    confirmImport(JSON.parse(await r.text()));
+  }catch(err){ toast('Não foi possível repor: '+ghErrText(err)); }
+}
+
+async function saveGhSettings(){
+  let repo = document.getElementById('ghRepoInput').value.trim()
+    .replace(/^https?:\/\/github\.com\//i,'').replace(/\.git$/i,'').replace(/\/+$/,'');
+  const token = document.getElementById('ghTokenInput').value.trim();
+  if(!repo && !token){
+    await idbPut('meta',{key:'ghRepo',value:''}); await idbPut('meta',{key:'ghToken',value:''});
+    state.ghRepo=''; state.ghToken=''; renderBackupStatus(); renderBackupBanner(); toast('Backup no GitHub removido'); return;
+  }
+  if(!/^[\w.-]+\/[\w.-]+$/.test(repo)){ toast('Escreve o repositório assim: utilizador/nome'); return; }
+  if(!token){ toast('Falta a chave de acesso'); return; }
+  try{
+    const r = await fetch(GH_API+repo, {headers: {'Authorization':'Bearer '+token,'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'}, cache:'no-store'});
+    if(r.status===401){ toast('Chave inválida ou expirada'); return; }
+    if(!r.ok){ toast('Não encontro esse repositório com esta chave'); return; }
+    const info = await r.json();
+    if(!info.private){ toast('Atenção: esse repositório é PÚBLICO. Usa um repositório privado só para os dados.'); return; }
+    await idbPut('meta',{key:'ghRepo',value:repo}); await idbPut('meta',{key:'ghToken',value:token});
+    state.ghRepo = repo; state.ghToken = token;
+    renderBackupStatus(); renderBackupBanner();
+    toast('Ligação OK ✓ (repositório privado)');
+  }catch(err){ toast('Não foi possível validar: '+ghErrText(err)); }
+}
+
+async function backupNow(){
+  if(ghConfigured()) await githubBackup(true); else await shareBackup();
+}
+
+document.getElementById('btnSaveGh').onclick = saveGhSettings;
+document.getElementById('btnGhNow').onclick = async ()=>{
+  const repoIn = document.getElementById('ghRepoInput').value.trim(), tokIn = document.getElementById('ghTokenInput').value.trim();
+  if(repoIn !== state.ghRepo || tokIn !== state.ghToken){ await saveGhSettings(); if(!ghConfigured()) return; }
+  githubBackup(true);
+};
+document.getElementById('btnGhRestore').onclick = githubRestore;
+window.addEventListener('online', ()=>{ if(ghConfigured() && pendingBackupCount()>0) githubBackup(false); });
 
 // ---------- Init ----------
 (async function init(){
@@ -1803,6 +1976,7 @@ document.getElementById('importFileInput').onchange = (e)=>{
   }
 
   syncSheet(false);   // envia jogos pendentes, se houver ligação configurada
+  if(ghConfigured() && pendingBackupCount()>0) githubBackup(false);
 
   if('serviceWorker' in navigator){
     navigator.serviceWorker.register('./sw.js').catch(()=>{});
